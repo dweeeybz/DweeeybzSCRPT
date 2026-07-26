@@ -10,25 +10,36 @@ local HttpService = game:GetService("HttpService")
 local PhysicsService = game:GetService("PhysicsService")
 local LP = Players.LocalPlayer
 local LOGO_ID = "130015817289840"
-local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
+local Rayfield = loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
 local function notify(title, text, dur)
 	pcall(function()
-		WindUI:Notify({ Title = title, Content = text, Duration = dur or 4 })
+		Rayfield:Notify({ Title = title, Content = text, Image = "pizza", Duration = dur or 4 })
 	end)
 end
-
--- KEY SYSTEM — edit these keys (users must enter one to open the UI)
-local VALID_KEYS = {
-	"imongmama",
-}
-
+local KEY_LIST_URL = "https://pastebin.com/raw/DgJy7H9A"
 local KILL_SWITCH_URL = "https://raw.githubusercontent.com/xJakeTzyx/Script/refs/heads/main/ok" -- must return "on" to run; "off"/down = kill; "" skips the check
+local LOCAL_KEYS = { }
+local DISCORD_INVITE = "https://discord.gg/rHDbekfmNg" -- <-- put your real invite here
 local function httpGet(url)
 	local ok, body = pcall(function() return game:HttpGet(url, true) end)
 	if ok and type(body) == "string" then return body end
 	return nil
 end
 local function trim(s) return (s:gsub("%s+$", ""):gsub("^%s+", "")) end
+local function buildKeyList()
+	local keys = {}
+	for _, k in ipairs(LOCAL_KEYS) do keys[#keys + 1] = k end
+	if KEY_LIST_URL ~= "" then
+		local body = httpGet(KEY_LIST_URL)
+		if body then
+			for line in body:gmatch("[^\r\n]+") do
+				line = trim(line)
+				if #line > 0 then keys[#keys + 1] = line end
+			end
+		end
+	end
+	return keys
+end
 -- fail-safe kill switch. Returns true ONLY if the switch says "on". Down/off/blank body = false.
 local function killSwitchAllows()
 	if KILL_SWITCH_URL == "" then return true end -- no switch configured -> allow (testing)
@@ -41,6 +52,14 @@ if not killSwitchAllows() then
 	notify("DweeybzSCRPT", "Hub is currently disabled. Check back later.", 8)
 	return
 end
+local VALID_KEYS = buildKeyList()
+-- Get Key -> copy the Discord invite to clipboard and notify.
+local function copyDiscordToClipboard()
+	if typeof(setclipboard) == "function" then
+		pcall(function() setclipboard(DISCORD_INVITE) end)
+		notify("Copied Discord Server", "get a key on server", 6)
+	end
+end
 local SYSTEM_ENABLED = false
 local DELIVERY_RUNNING = false
 local MOOD_ACTIVE = false
@@ -49,7 +68,6 @@ local driveConn = nil
 local AUTO_MOOD_ENABLED = true
 local MOOD_METHOD = 2
 local FUN_OK = false
-local ANTI_AFK_ENABLED = true
 _G.PIZZA_SPEED = 64
 _G.PIZZA_MOOD_THRESH = 30 -- legacy (house method now uses per-mood triggers below)
 _G.PIZZA_FOOD = "Pear"
@@ -1004,72 +1022,47 @@ do
 	end
 end
 -- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-
--- ANTI AFK (prevents 20min idle kick)
-task.spawn(function()
-	local vu
-	pcall(function()
-		vu = game:GetService("VirtualUser")
-	end)
-	while true do
-		task.wait(60) -- every 60s is safe under 20min kick
-		if not ANTI_AFK_ENABLED then continue end
-		pcall(function()
-			-- VirtualUser idle input (does not move character)
-			if vu then
-				vu:CaptureController()
-				vu:ClickButton2(Vector2.new())
-			end
-			-- Camera nudge as extra activity signal
-			local cam = workspace.CurrentCamera
-			if cam then
-				local cf = cam.CFrame
-				cam.CFrame = cf * CFrame.Angles(0, 0.0001, 0)
-				task.wait(0.03)
-				cam.CFrame = cf
-			end
-		end)
-	end
-end)
-
--- GUI — WindUI
-local Window = WindUI:CreateWindow({
-	Title = "DweeybzSCRPT",
-	Icon = "pizza",
-	Theme = "Dark",
-	Folder = "DweeybzSCRPT",
-	KeySystem = {
+-- GUI â€” Rayfield Interface Suite (docs: https://docs.sirius.menu/rayfield)
+-- change: no window/tab icons | Discord prompt = Get Key path | sections+dividers for spacing
+-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+local Window = Rayfield:CreateWindow({
+	Name = "DweeybzSCRPT",
+	LoadingTitle = "DweeybzSCRPT",
+	LoadingSubtitle = "Auto Delivery",
+	ConfigurationSaving = {
+		Enabled = false, -- our own DweeybzSCRPT/config.txt handles saving
+		FolderName = nil,
+		FileName = "DweeybzSCRPT",
+	},
+	Discord = {
+		Enabled = true,          -- Get Key: prompts the user to join the Discord on supported executors
+		Invite = "rHDbekfmNg",   -- invite code only, no discord.gg/
+		RememberJoins = true,
+	},
+	KeySystem = false,
+	KeySettings = {
 		Title = "DweeybzSCRPT",
-		Note = "Enter a valid key to continue",
+		Subtitle = "Key System",
+		Note = "Join the Discord to get a key, link copied on your clipboard",
+		FileName = "DweeybzSCRPTKey",
+		SaveKey = false,
+		GrabKeyFromSite = false, -- VALID_KEYS is already the literal accepted list
 		Key = VALID_KEYS,
-		SaveKey = true, -- remembers key after first correct entry
 	},
 })
 
-local Tab = Window:Tab({
-	Title = "Main",
-	Icon = "home",
-})
-
-local moodSection = Tab:Section({ Title = "Mood", Opened = true })
-local moodLabel = moodSection:Paragraph({
-	Title = "Moods",
-	Desc = "Fun -- | Ene -- | Hun -- | Hyg --",
-})
-local function setLabel(lbl, text)
-	if lbl then
-		pcall(function()
-			lbl:SetDesc(text)
-		end)
-	end
-end
+local Tab = Window:CreateTab("Main")
+Tab:CreateSection("Mood")
+local moodLabel = Tab:CreateLabel("Moods: --")
+local function setLabel(lbl, text) if lbl then pcall(function() lbl:Set(text) end) end end
 local function log(_) end
 sharedLog = log
 
-local deliverySection = Tab:Section({ Title = "Delivery", Opened = true })
-deliverySection:Toggle({
-	Title = "Pizza Deliver w/ Smart Auto Mood",
-	Value = SAVED_PIZZA_DELIVER,
+Tab:CreateSection("Delivery")
+Tab:CreateToggle({
+	Name = "Pizza Deliver w/ Smart Auto Mood",
+	CurrentValue = SAVED_PIZZA_DELIVER,
+	Flag = "DeliveryToggle",
 	Callback = function(v)
 		SYSTEM_ENABLED = v
 		if SYSTEM_ENABLED then
@@ -1082,54 +1075,44 @@ deliverySection:Toggle({
 	end,
 })
 
-local triggerSection = Tab:Section({ Title = "Mood Triggers", Opened = true })
-local hungerSlider = triggerSection:Slider({
-	Title = "Hunger Trigger",
-	Step = 1,
-	Value = { Min = 0, Max = 100, Default = _G.HUNGER_TRIGGER },
+Tab:CreateSection("Mood Triggers")
+local hungerSlider = Tab:CreateSlider({
+	Name = "Hunger Trigger",
+	Range = {0, 100}, Increment = 1, Suffix = "%", CurrentValue = _G.HUNGER_TRIGGER,
+	Flag = "HungerTrig",
 	Callback = function(v) _G.HUNGER_TRIGGER = v end,
 })
-local hygieneSlider = triggerSection:Slider({
-	Title = "Hygiene Trigger",
-	Step = 1,
-	Value = { Min = 0, Max = 100, Default = _G.HYGIENE_TRIGGER },
+local hygieneSlider = Tab:CreateSlider({
+	Name = "Hygiene Trigger",
+	Range = {0, 100}, Increment = 1, Suffix = "%", CurrentValue = _G.HYGIENE_TRIGGER,
+	Flag = "HygieneTrig",
 	Callback = function(v) _G.HYGIENE_TRIGGER = v end,
 })
-local funSlider = triggerSection:Slider({
-	Title = "Fun Trigger",
-	Step = 1,
-	Value = { Min = 0, Max = 100, Default = _G.FUN_TRIGGER },
+local funSlider = Tab:CreateSlider({
+	Name = "Fun Trigger",
+	Range = {0, 100}, Increment = 1, Suffix = "%", CurrentValue = _G.FUN_TRIGGER,
+	Flag = "FunTrig",
 	Callback = function(v) _G.FUN_TRIGGER = v end,
 })
 
-local SettingsTab = Window:Tab({
-	Title = "Settings",
-	Icon = "settings",
-})
+local SettingsTab = Window:CreateTab("Settings")
 
-local antiAfkSection = SettingsTab:Section({ Title = "Anti AFK", Opened = true })
-antiAfkSection:Toggle({
-	Title = "Anti AFK (prevent idle kick)",
-	Desc = "Keeps you from being kicked after ~20 min of inactivity",
-	Value = ANTI_AFK_ENABLED,
-	Callback = function(v) ANTI_AFK_ENABLED = v end,
-})
-
-local configSection = SettingsTab:Section({ Title = "Config", Opened = true })
-configSection:Toggle({
-	Title = "Auto Load Config",
-	Value = AUTO_LOAD,
+SettingsTab:CreateSection("Config")
+SettingsTab:CreateToggle({
+	Name = "Auto Load Config",
+	CurrentValue = AUTO_LOAD,
+	Flag = "AutoLoadConfig",
 	Callback = function(v) AUTO_LOAD = v end,
 })
-configSection:Button({
-	Title = "Save Config",
+SettingsTab:CreateButton({
+	Name = "Save Config",
 	Callback = function()
 		local ok = saveConfig()
 		notify("DweeybzSCRPT", ok and "Config saved to DweeybzSCRPT/config.txt" or "Save failed (no file access)")
 	end,
 })
-configSection:Button({
-	Title = "Reset Config",
+SettingsTab:CreateButton({
+	Name = "Reset Config",
 	Callback = function()
 		resetConfig()
 		pcall(function() hungerSlider:Set(_G.HUNGER_TRIGGER) end)
@@ -1142,7 +1125,7 @@ configSection:Button({
 task.spawn(function()
 	while true do
 		pcall(function()
-			local m = getMoods()
+			local m=getMoods()
 			setLabel(moodLabel, ("Fun %d | Ene %d | Hun %d | Hyg %d"):format(m.Fun, m.Energy, m.Hunger, m.Hygiene))
 		end)
 		task.wait(0.5)
