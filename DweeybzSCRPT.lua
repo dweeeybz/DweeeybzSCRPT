@@ -6,6 +6,7 @@ local RunService = game:GetService("RunService")
 local PF = game:GetService("PathfindingService")
 local CollectionService = game:GetService("CollectionService")
 local UIS = game:GetService("UserInputService")
+local VirtualUser = game:GetService("VirtualUser")
 local HttpService = game:GetService("HttpService")
 local PhysicsService = game:GetService("PhysicsService")
 local LP = Players.LocalPlayer
@@ -282,7 +283,7 @@ end
 -- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 -- NOCLIP (collision-group based)
 -- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-local NOCLIP_GROUP = "DweeybzMopedNoclip"
+local NOCLIP_GROUP = "OpusMopedNoclip"
 local groupReady = false
 do
 	pcall(function()
@@ -1021,6 +1022,17 @@ do
 		end
 	end
 end
+-- ══════════════════════════════════════════════
+-- ANTI AFK — resets Roblox's own idle timer so it doesn't auto-kick after ~20min
+-- ════════════════════════════════════════
+local ANTI_AFK_ENABLED = true
+local antiAfkConn = LP.Idled:Connect(function()
+	if not ANTI_AFK_ENABLED then return end
+	pcall(function()
+		VirtualUser:CaptureController()
+		VirtualUser:ClickButton2(Vector2.new())
+	end)
+end)
 -- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 -- GUI â€” Rayfield Interface Suite (docs: https://docs.sirius.menu/rayfield)
 -- change: no window/tab icons | Discord prompt = Get Key path | sections+dividers for spacing
@@ -1096,6 +1108,14 @@ local funSlider = Tab:CreateSlider({
 })
 
 local SettingsTab = Window:CreateTab("Settings")
+
+SettingsTab:CreateSection("Anti AFK")
+SettingsTab:CreateToggle({
+	Name = "Anti AFK",
+	CurrentValue = ANTI_AFK_ENABLED,
+	Flag = "AntiAfkToggle",
+	Callback = function(v) ANTI_AFK_ENABLED = v end,
+})
 
 SettingsTab:CreateSection("Config")
 SettingsTab:CreateToggle({
