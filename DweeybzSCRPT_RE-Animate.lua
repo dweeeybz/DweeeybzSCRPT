@@ -32,28 +32,10 @@ if makefolder and not isfolder(CONFIG_FOLDER) then
 	makefolder(CONFIG_FOLDER)
 end
 
--- // Save the player's original animations once, so we can restore them later
-if not getgenv().OriginalAnimations then
-	getgenv().OriginalAnimations = {}
-	local Animate = LocalPlayer.Character.Animate
-	if Animate:FindFirstChild("pose") then
-		local poseAnimation = Animate.pose:FindFirstChildOfClass("Animation")
-		if poseAnimation then
-			OriginalAnimations[3] = poseAnimation.AnimationId
-		end
-	end
-	OriginalAnimations[1] = Animate.idle.Animation1.AnimationId
-	OriginalAnimations[2] = Animate.idle.Animation2.AnimationId
-	OriginalAnimations[4] = Animate.walk:FindFirstChildOfClass("Animation").AnimationId
-	OriginalAnimations[5] = Animate.run:FindFirstChildOfClass("Animation").AnimationId
-	OriginalAnimations[6] = Animate.jump:FindFirstChildOfClass("Animation").AnimationId
-	OriginalAnimations[7] = Animate.climb:FindFirstChildOfClass("Animation").AnimationId
-	OriginalAnimations[8] = Animate.fall:FindFirstChildOfClass("Animation").AnimationId
-	if Animate:FindFirstChild("swim") then
-		OriginalAnimations[9] = Animate.swim:FindFirstChildOfClass("Animation").AnimationId
-		OriginalAnimations[10] = Animate.swimidle:FindFirstChildOfClass("Animation").AnimationId
-	end
-end
+-- // Note: with the track-based animation system below, we never modify the
+-- // default Animate script's own AnimationId properties, so there's nothing
+-- // to back up/restore. DEFAULT just stops our custom tracks and re-enables Animate.
+
 
 -- // Load WindUI
 local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
@@ -383,6 +365,10 @@ local CurrentAnimationPack = nil   -- name of the currently equipped animation p
 local CurrentEmoteName = nil       -- name of the currently playing emote (nil = none)
 local CurrentEmoteTrack = nil
 
+local CurrentAnimTracks = {}       -- state name -> AnimationTrack, for the currently equipped pack
+local CurrentAnimConnections = {}  -- Humanoid signal connections driving CurrentAnimTracks
+local CurrentAnimState = nil       -- which track is currently playing ("Idle", "Walk", etc.)
+
 getgenv().Favorites = getgenv().Favorites or { Animation = {}, Emote = {} }
 local Favorites = getgenv().Favorites
 
@@ -454,80 +440,131 @@ for _ in pairs(Emotes) do totalEmotes = totalEmotes + 1 end
 -- // CORE PLAYBACK FUNCTIONS
 -- ============================================================
 
-local function StopAllTracks()
-	local Humanoid = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
-	if not Humanoid then return end
-	for _, track in ipairs(Humanoid:GetPlayingAnimationTracks()) do
-		track:Stop()
+-- Stops every custom track and disconnects every listener from the previously
+-- equipped pack, so packs never stack/fight each other.
+local function CleanupAnimationTracks()
+	for _, conn in ipairs(CurrentAnimConnections) do
+		conn:Disconnect()
 	end
+	table.clear(CurrentAnimConnections)
+
+	for _, track in pairs(CurrentAnimTracks) do
+		pcall(function() track:Stop(0.1) end)
+	end
+	table.clear(CurrentAnimTracks)
+
+	CurrentAnimState = nil
 end
 
-local function RefreshAnims()
-	repeat task.wait() until LocalPlayer.Character
-		and LocalPlayer.Character:FindFirstChild("Animate")
-		and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
-		and LocalPlayer.Character.Humanoid:FindFirstChild("Animator")
-	LocalPlayer.Character.Animate.Disabled = true
-	StopAllTracks()
-	LocalPlayer.Character.Animate.Disabled = false
-	local Humanoid = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
-	local originalSpeed = Humanoid.WalkSpeed
-	Humanoid.WalkSpeed = 0
-	task.wait()
-	Humanoid.WalkSpeed = originalSpeed
+-- Plays the track for a given state (Idle/Walk/Run/Jump/Climb/Fall/Swim/SwimIdle),
+-- fading out whatever was playing before. Skips redundant replays of the same state.
+local function PlayAnimState(stateName)
+	if CurrentAnimState == stateName then return end
+	local track = CurrentAnimTracks[stateName]
+	if not track and stateName ~= "Idle" then
+		-- This pack didn't include (or failed to load) a track for this state --
+		-- fall back to Idle rather than leaving nothing playing at all.
+		track = CurrentAnimTracks.Idle
+		stateName = "Idle"
+		if CurrentAnimState == stateName then return end
+	end
+	if not track then return end
+
+	for name, otherTrack in pairs(CurrentAnimTracks) do
+		if name ~= stateName and otherTrack.IsPlaying then
+			otherTrack:Stop(0.1)
+		end
+	end
+
+	track:Play(0.1)
+	CurrentAnimState = stateName
 end
 
 local function EquipAnimation(packName)
 	local pack = Animations[packName]
 	if not pack then return end
-	repeat task.wait() until LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Animate")
-	local Animate = LocalPlayer.Character.Animate
+	local Humanoid = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+	if not Humanoid then return end
 
-	if Animate:FindFirstChild("idle") then
-		Animate.idle.Animation1.AnimationId = URL .. pack.Idle
-		Animate.idle.Animation1.Weight.Value = tostring(pack.Weight)
-		Animate.idle.Animation2.Weight.Value = tostring(pack.Weight2)
-		Animate.idle.Animation2.AnimationId = URL .. pack.Idle2
-	end
-	if pack.Idle3 and Animate:FindFirstChild("pose") then
-		Animate.pose:FindFirstChildOfClass("Animation").AnimationId = URL .. pack.Idle3
-	end
-	Animate.walk:FindFirstChildOfClass("Animation").AnimationId = URL .. pack.Walk
-	Animate.run:FindFirstChildOfClass("Animation").AnimationId = URL .. pack.Run
-	Animate.jump:FindFirstChildOfClass("Animation").AnimationId = URL .. pack.Jump
-	Animate.climb:FindFirstChildOfClass("Animation").AnimationId = URL .. pack.Climb
-	Animate.fall:FindFirstChildOfClass("Animation").AnimationId = URL .. pack.Fall
-	if Animate:FindFirstChild("swim") then
-		Animate.swim:FindFirstChildOfClass("Animation").AnimationId = URL .. pack.Swim
-		Animate.swimidle:FindFirstChildOfClass("Animation").AnimationId = URL .. pack.SwimIdle
+	CleanupAnimationTracks()
+
+	-- We deliberately do NOT disable the default Animate script here. Since our
+	-- tracks are loaded at Action priority (below), they already visually win
+	-- over Animate's output on every client -- including ours. Leaving Animate
+	-- running means if any single track in this pack fails to load, the
+	-- character still has a normal default animation to fall back on for that
+	-- state instead of freezing in place with nothing playing.
+
+	-- Loads one state's AnimationTrack. Using Humanoid:LoadAnimation + :Play()
+	-- (instead of editing Animate's AnimationId properties) is what makes this
+	-- replicate to other players, the same way emotes and official animations do.
+	local function LoadTrack(animId, looped)
+		if not animId or animId == 0 or animId == "None" then return nil end
+		local animation = Instance.new("Animation")
+		animation.AnimationId = URL .. animId
+		local ok, track = pcall(function() return Humanoid:LoadAnimation(animation) end)
+		if not ok or not track then return nil end
+		track.Priority = Enum.AnimationPriority.Action
+		track.Looped = looped
+		return track
 	end
 
-	RefreshAnims()
+	CurrentAnimTracks.Idle = LoadTrack(pack.Idle, true)
+	CurrentAnimTracks.Walk = LoadTrack(pack.Walk, true)
+	CurrentAnimTracks.Run = LoadTrack(pack.Run, true)
+	CurrentAnimTracks.Jump = LoadTrack(pack.Jump, false)
+	CurrentAnimTracks.Climb = LoadTrack(pack.Climb, true)
+	CurrentAnimTracks.Fall = LoadTrack(pack.Fall, true)
+	CurrentAnimTracks.Swim = LoadTrack(pack.Swim, true)
+	CurrentAnimTracks.SwimIdle = LoadTrack(pack.SwimIdle, true)
+
+	-- Idle / Walk / Run, based on how fast the character is actually moving.
+	table.insert(CurrentAnimConnections, Humanoid.Running:Connect(function(speed)
+		if speed > 0.5 then
+			if speed > 20 then
+				PlayAnimState("Run")
+			else
+				PlayAnimState("Walk")
+			end
+		else
+			PlayAnimState("Idle")
+		end
+	end))
+
+	table.insert(CurrentAnimConnections, Humanoid.Jumping:Connect(function(active)
+		if active then PlayAnimState("Jump") end
+	end))
+
+	table.insert(CurrentAnimConnections, Humanoid.FreeFalling:Connect(function(active)
+		if active then PlayAnimState("Fall") end
+	end))
+
+	table.insert(CurrentAnimConnections, Humanoid.Climbing:Connect(function(speed)
+		if speed ~= 0 then PlayAnimState("Climb") end
+	end))
+
+	table.insert(CurrentAnimConnections, Humanoid.Swimming:Connect(function(speed)
+		if speed > 0.5 then
+			PlayAnimState("Swim")
+		else
+			PlayAnimState("SwimIdle")
+		end
+	end))
+
+	PlayAnimState("Idle")
+
 	CurrentAnimationPack = packName
 end
 
 local function DefaultAnimations()
-	if not getgenv().OriginalAnimations then return end
-	repeat task.wait() until LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Animate")
-	local Animate = LocalPlayer.Character.Animate
-	local O = getgenv().OriginalAnimations
+	CleanupAnimationTracks()
 
-	if O[1] then Animate.idle.Animation1.AnimationId = O[1] end
-	if O[2] then Animate.idle.Animation2.AnimationId = O[2] end
-	if O[3] and Animate:FindFirstChild("pose") then
-		Animate.pose:FindFirstChildOfClass("Animation").AnimationId = O[3]
-	end
-	if O[4] then Animate.walk:FindFirstChildOfClass("Animation").AnimationId = O[4] end
-	if O[5] then Animate.run:FindFirstChildOfClass("Animation").AnimationId = O[5] end
-	if O[6] then Animate.jump:FindFirstChildOfClass("Animation").AnimationId = O[6] end
-	if O[7] then Animate.climb:FindFirstChildOfClass("Animation").AnimationId = O[7] end
-	if O[8] then Animate.fall:FindFirstChildOfClass("Animation").AnimationId = O[8] end
-	if Animate:FindFirstChild("swim") then
-		if O[9] then Animate.swim:FindFirstChildOfClass("Animation").AnimationId = O[9] end
-		if O[10] then Animate.swimidle:FindFirstChildOfClass("Animation").AnimationId = O[10] end
+	-- Defensive: make sure Animate is on, in case anything else left it disabled.
+	local Animate = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Animate")
+	if Animate and Animate.Disabled then
+		Animate.Disabled = false
 	end
 
-	RefreshAnims()
 	CurrentAnimationPack = nil
 end
 
@@ -539,19 +576,22 @@ local function EquipEmote(emoteName)
 
 	if CurrentEmoteTrack then
 		CurrentEmoteTrack:Stop()
+		CurrentEmoteTrack = nil
 	end
 
 	local Animation = Instance.new("Animation")
 	Animation.AnimationId = "rbxassetid://" .. id
-	CurrentEmoteTrack = Humanoid:LoadAnimation(Animation)
-	CurrentEmoteTrack.Priority = Enum.AnimationPriority.Idle
-	CurrentEmoteTrack.Looped = true
-	CurrentEmoteTrack:Play(0)
+	local ok, track = pcall(function() return Humanoid:LoadAnimation(Animation) end)
+	if not ok or not track then return end
 
-	if not LocalPlayer.Character.Animate.Disabled then
-		LocalPlayer.Character.Animate.Disabled = true
-	end
+	-- Action4 is what Roblox's own built-in emotes use -- it guarantees this
+	-- wins the priority fight over Animate (ours and everyone else's copy of it)
+	-- and over an equipped Animation pack (Action), on every viewer's screen.
+	track.Priority = Enum.AnimationPriority.Action4
+	track.Looped = true
+	track:Play(0)
 
+	CurrentEmoteTrack = track
 	CurrentEmoteName = emoteName
 end
 
@@ -560,10 +600,43 @@ local function DefaultEmote()
 		CurrentEmoteTrack:Stop()
 		CurrentEmoteTrack = nil
 	end
-	if LocalPlayer.Character:FindFirstChild("Animate") then
-		LocalPlayer.Character.Animate.Disabled = false
+	-- Defensive: make sure Animate is on, in case anything else left it disabled.
+	local Animate = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Animate")
+	if Animate and Animate.Disabled then
+		Animate.Disabled = false
 	end
 	CurrentEmoteName = nil
+end
+
+-- Sitting in a Seat welds the character into a sitting pose. Our Action-priority
+-- tracks are strong enough to override that pose (which is what caused the
+-- "still standing while sitting" bug) if we don't pause them while seated.
+local function HandleSeatedChanged(active)
+	if active then
+		if CurrentEmoteTrack and CurrentEmoteTrack.IsPlaying then
+			CurrentEmoteTrack:Stop(0.1)
+		end
+		for _, track in pairs(CurrentAnimTracks) do
+			if track.IsPlaying then
+				track:Stop(0.1)
+			end
+		end
+		CurrentAnimState = nil -- so PlayAnimState resumes cleanly once we stand back up
+	else
+		if CurrentEmoteTrack then
+			CurrentEmoteTrack:Play(0.1)
+		end
+		if CurrentAnimationPack and next(CurrentAnimTracks) then
+			PlayAnimState("Idle")
+		end
+	end
+end
+
+do
+	local Humanoid = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+	if Humanoid then
+		Humanoid.Seated:Connect(HandleSeatedChanged)
+	end
 end
 
 -- ============================================================
